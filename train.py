@@ -160,42 +160,9 @@ def evaluate(net, criterion, X, Y):
 
 
 def train_model_over_curriculum(model, args):
-    num_batches = model.params.num_batches
-    batch_size = model.params.batch_size
 
-    LOGGER.info("Training model for %d batches (batch_size=%d)...",
-                num_batches, batch_size)
-
-    losses = []
-    costs = []
-    seq_lengths = []
-    start_ms = get_ms()
-
-    for batch_num, x, y in model.dataloader:
-        loss, cost = train_batch(model.net, model.criterion, model.optimizer, x, y)
-        losses += [loss]
-        costs += [cost]
-        seq_lengths += [y.size(0)]
-
-        # Update the progress bar
-        progress_bar(batch_num, args.report_interval, loss)
-
-        # Report
-        if batch_num % args.report_interval == 0:
-            mean_loss = np.array(losses[-args.report_interval:]).mean()
-            mean_cost = np.array(costs[-args.report_interval:]).mean()
-            mean_time = int(((get_ms() - start_ms) / args.report_interval) / batch_size)
-            progress_clean()
-            LOGGER.info("Batch %d Loss: %.6f Cost: %.2f Time: %d ms/sequence",
-                        batch_num, mean_loss, mean_cost, mean_time)
-            start_ms = get_ms()
-
-        # Checkpoint
-        if (args.checkpoint_interval != 0) and (batch_num % args.checkpoint_interval == 0):
-            save_checkpoint(model.net, model.params.name, args,
-                            batch_num, losses, costs, seq_lengths)
-
-    LOGGER.info("Done training.")
+    for train_curriculum_index, curriculum_params in enumerate(gen_curriculum_params(model.params)):
+        train_model(model, args, params=curriculum_params, train_curriculum_index=train_curriculum_index)
 
 
 def train_model(model, args, params=None, train_curriculum_index=1):
@@ -206,8 +173,8 @@ def train_model(model, args, params=None, train_curriculum_index=1):
     num_batches = params.num_batches
     batch_size = params.batch_size
 
-    LOGGER.info("Training model for %d batches (batch_size=%d)...",
-                num_batches, batch_size)
+    LOGGER.info("Training train_curriculum_index: %d model for %d batches (batch_size=%d)...",
+                train_curriculum_index, num_batches, batch_size)
 
     losses = []
     costs = []
@@ -374,7 +341,7 @@ def main():
     model = init_model(args)
 
     LOGGER.info("Total number of parameters: %d", model.net.calculate_num_params())
-    train_model(model, args)
+    train_model_over_curriculum(model, args)
 
 
 def gen_curriculum_params(param):
