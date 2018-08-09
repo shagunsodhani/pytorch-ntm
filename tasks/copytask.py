@@ -15,7 +15,8 @@ def dataloader(num_batches,
                batch_size,
                seq_width,
                min_len,
-               max_len):
+               max_len,
+               seed=42):
     """Generator of random sequences for the copy task.
 
     Creates random batches of "bits" sequences.
@@ -28,15 +29,20 @@ def dataloader(num_batches,
     :param batch_size: Batch size.
     :param min_len: Sequence minimum length.
     :param max_len: Sequence maximum length.
+    :param seed: Seed to ensure data for each sequence length is exactly the same.
 
     NOTE: The input width is `seq_width + 1`, the additional input
     contain the delimiter.
     """
+
+    rng = np.random.RandomState(seed)
     for batch_num in range(num_batches):
 
         # All batches have the same sequence length
-        seq_len = random.randint(min_len, max_len)
-        seq = np.random.binomial(1, 0.5, (seq_len, batch_size, seq_width))
+        seq_len = rng.randint(min_len, max_len)
+        seq = rng.binomial(1, 0.5, (seq_len, batch_size, seq_width))
+        # seq_len = random.randint(min_len, max_len)
+        # seq = np.random.binomial(1, 0.5, (seq_len, batch_size, seq_width))
         seq = torch.from_numpy(seq)
 
         # The input includes an additional channel used for the delimiter
