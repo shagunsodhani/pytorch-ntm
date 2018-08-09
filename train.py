@@ -5,21 +5,21 @@
 import argparse
 import json
 import logging
-import time
 import random
 import re
 import sys
+import time
+from copy import deepcopy
 
-import attr
 import argcomplete
-import torch
+import attr
 import numpy as np
-
+import torch
 
 LOGGER = logging.getLogger(__name__)
 
-
 from tasks.copytask import CopyTaskModelTraining, CopyTaskParams
+from tasks.copytask import dataloader as copytask_dataloader
 from tasks.repeatcopytask import RepeatCopyTaskModelTraining, RepeatCopyTaskParams
 
 TASKS = {
@@ -27,11 +27,10 @@ TASKS = {
     'repeat-copy': (RepeatCopyTaskModelTraining, RepeatCopyTaskParams)
 }
 
-
 # Default values for program arguments
 RANDOM_SEED = 1000
-REPORT_INTERVAL = 200
-CHECKPOINT_INTERVAL = 1000
+REPORT_INTERVAL = 10
+CHECKPOINT_INTERVAL = 100000
 
 
 def get_ms():
@@ -57,7 +56,7 @@ def progress_clean():
 
 def progress_bar(batch_num, report_interval, last_loss):
     """Prints the progress until the next report."""
-    progress = (((batch_num-1) % report_interval) + 1) / report_interval
+    progress = (((batch_num - 1) % report_interval) + 1) / report_interval
     fill = int(progress * 40)
     print("\r[{}{}]: {} (Loss: {:.4f})".format(
         "=" * fill, " " * (40 - fill), batch_num, last_loss), end='')
@@ -116,7 +115,7 @@ def train_batch(net, criterion, optimizer, X, Y):
     y_out_binarized.apply_(lambda x: 0 if x < 0.5 else 1)
 
     # The cost is the number of error bits per sequence
-    cost = torch.sum(torch.abs(y_out_binarized - Y.data))
+    cost = torch.mean(torch.abs(y_out_binarized - Y.data))
 
     return loss.item(), cost.item() / batch_size
 
@@ -147,7 +146,7 @@ def evaluate(net, criterion, X, Y):
     y_out_binarized.apply_(lambda x: 0 if x < 0.5 else 1)
 
     # The cost is the number of error bits per sequence
-    cost = torch.sum(torch.abs(y_out_binarized - Y.data))
+    cost = torch.mean(torch.abs(y_out_binarized - Y.data))
 
     result = {
         'loss': loss.data[0],
@@ -160,7 +159,7 @@ def evaluate(net, criterion, X, Y):
     return result
 
 
-def train_model(model, args):
+def train_model_over_curriculum(model, args):
     num_batches = model.params.num_batches
     batch_size = model.params.batch_size
 
@@ -197,6 +196,105 @@ def train_model(model, args):
                             batch_num, losses, costs, seq_lengths)
 
     LOGGER.info("Done training.")
+
+
+def train_model(model, args, params=None, train_curriculum_index=1):
+
+    if not params:
+        params = model.params
+
+    num_batches = params.num_batches
+    batch_size = params.batch_size
+
+    LOGGER.info("Training model for %d batches (batch_size=%d)...",
+                num_batches, batch_size)
+
+    losses = []
+    costs = []
+    seq_lengths = []
+    start_ms = get_ms()
+    train_dataloader = copytask_dataloader(num_batches=num_batches,
+                                           batch_size=batch_size,
+                                           seq_width=params.sequence_width,
+                                           min_len=params.sequence_min_len,
+                                           max_len=params.sequence_max_len)
+    for batch_num, x, y in train_dataloader:
+        loss, cost = train_batch(model.net, model.criterion, model.optimizer, x, y)
+        losses += [loss]
+        costs += [cost]
+        seq_lengths += [y.size(0)]
+
+        # Update the progress bar
+        progress_bar(batch_num, args.report_interval, loss)
+
+        # Report
+        if batch_num % args.report_interval == 0:
+            mean_loss = np.array(losses[-args.report_interval:]).mean()
+            mean_cost = np.array(costs[-args.report_interval:]).mean()
+            mean_time = int(((get_ms() - start_ms) / args.report_interval) / batch_size)
+            progress_clean()
+            LOGGER.info("Batch %d Loss: %.6f Accuracy: %.2f Time: %d ms/sequence",
+                        batch_num, mean_loss, 1 - mean_cost, mean_time)
+            start_ms = get_ms()
+
+        # Checkpoint
+        if (args.checkpoint_interval != 0) and (batch_num % args.checkpoint_interval == 0):
+            save_checkpoint(model.net, params.name, args,
+                            batch_num, losses, costs, seq_lengths)
+    mean_loss = np.array(losses[-args.report_interval:]).mean()
+    mean_cost = np.array(costs[-args.report_interval:]).mean()
+    LOGGER.info("Done testing for curriculum_test_index {}. "
+                "Average Batch Loss: {}, Average Accuracy: {}"
+                .format(train_curriculum_index, mean_loss, 1 - mean_cost))
+
+    LOGGER.info("Done training for train_curriculum_index: {}".format(train_curriculum_index))
+
+    for test_curriculum_index, curriculum_params in enumerate(gen_curriculum_params(params)):
+        test_num_batches = 10
+        test_batch_size = curriculum_params.batch_size
+
+        LOGGER.info("Testing model for curriculum_index %d, %d batches (batch_size=%d)...",
+                    test_curriculum_index, test_num_batches, test_batch_size)
+        test_losses = []
+        test_costs = []
+        test_seq_lengths = []
+        test_start_ms = get_ms()
+        test_dataloader = copytask_dataloader(num_batches=test_num_batches,
+                                              batch_size=test_batch_size,
+                                              seq_width=curriculum_params.sequence_width,
+                                              min_len=curriculum_params.sequence_min_len,
+                                              max_len=curriculum_params.sequence_max_len)
+        for batch_num, x, y in test_dataloader:
+            result = evaluate(model.net, model.criterion, x, y)
+            test_loss, test_cost = result["loss"], result["cost"]
+            test_losses += [test_loss]
+            test_costs += [test_cost]
+            test_seq_lengths += [y.size(0)]
+
+            # Update the progress bar
+            progress_bar(batch_num, args.report_interval, test_loss)
+
+            # Report
+            if batch_num % args.report_interval == 0:
+                mean_loss = np.array(test_losses[-args.report_interval:]).mean()
+                mean_cost = np.array(test_costs[-args.report_interval:]).mean()
+                mean_time = int(((get_ms() - test_start_ms) / args.report_interval) / batch_size)
+                progress_clean()
+                LOGGER.info("Batch %d Loss: %.6f Accuracy: %.2f Time: %d ms/sequence",
+                            batch_num, mean_loss, 1 - mean_cost, mean_time)
+                test_start_ms = get_ms()
+
+            # Checkpoint
+            if (args.checkpoint_interval != 0) and (batch_num % args.checkpoint_interval == 0):
+                save_checkpoint(model.net, curriculum_params.name, args,
+                                batch_num, test_losses, test_costs, test_seq_lengths)
+
+        mean_loss = np.array(test_losses[-args.report_interval:]).mean()
+        mean_cost = np.array(test_costs[-args.report_interval:]).mean()
+        LOGGER.info("Done testing for test_curriculum_index {}. "
+                    "Average Batch Loss: {}, Average Accuracy: {}"
+                    .format(test_curriculum_index, mean_loss, 1 - mean_cost))
+    LOGGER.info("Done testing for all the curriculum_test_indices.")
 
 
 def init_arguments():
@@ -244,6 +342,7 @@ def update_model_params(params, update):
 
     return params
 
+
 def init_model(args):
     LOGGER.info("Training for the **%s** task", args.task)
 
@@ -276,6 +375,16 @@ def main():
 
     LOGGER.info("Total number of parameters: %d", model.net.calculate_num_params())
     train_model(model, args)
+
+
+def gen_curriculum_params(param):
+    sequence_min_len = param.sequence_min_len
+    sequence_max_len = param.sequence_max_len
+    for sequence_len in range(sequence_min_len, sequence_max_len):
+        current_param = deepcopy(param)
+        current_param.sequence_max_len = sequence_len
+        current_param.sequence_min_len = sequence_len
+        yield current_param
 
 
 if __name__ == '__main__':
