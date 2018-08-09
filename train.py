@@ -17,6 +17,8 @@ import numpy as np
 import torch
 
 LOGGER = logging.getLogger(__name__)
+fh = logging.FileHandler('log.txt')
+LOGGER.addHandler(fh)
 
 from tasks.copytask import CopyTaskModelTraining, CopyTaskParams
 from tasks.copytask import dataloader as copytask_dataloader
@@ -29,7 +31,7 @@ TASKS = {
 
 # Default values for program arguments
 RANDOM_SEED = 1000
-REPORT_INTERVAL = 10
+REPORT_INTERVAL = 1000
 CHECKPOINT_INTERVAL = 100000
 
 
@@ -51,15 +53,17 @@ def init_seed(seed=None):
 
 def progress_clean():
     """Clean the progress bar."""
-    print("\r{}".format(" " * 80), end='\r')
+    pass
+    # print("\r{}".format(" " * 80), end='\r')
 
 
 def progress_bar(batch_num, report_interval, last_loss):
     """Prints the progress until the next report."""
-    progress = (((batch_num - 1) % report_interval) + 1) / report_interval
-    fill = int(progress * 40)
-    print("\r[{}{}]: {} (Loss: {:.4f})".format(
-        "=" * fill, " " * (40 - fill), batch_num, last_loss), end='')
+    pass
+    # progress = (((batch_num - 1) % report_interval) + 1) / report_interval
+    # fill = int(progress * 40)
+    # print("\r[{}{}]: {} (Loss: {:.4f})".format(
+    #     "=" * fill, " " * (40 - fill), batch_num, last_loss), end='')
 
 
 def save_checkpoint(net, name, args, batch_num, losses, costs, seq_lengths):
@@ -210,14 +214,13 @@ def train_model(model, args, params=None, train_curriculum_index=1):
                             batch_num, losses, costs, seq_lengths)
     mean_loss = np.array(losses[-args.report_interval:]).mean()
     mean_cost = np.array(costs[-args.report_interval:]).mean()
-    LOGGER.info("Done testing for curriculum_test_index {}. "
+    LOGGER.info("Done training for curriculum_test_index {}. "
                 "Average Batch Loss: {}, Average Accuracy: {}"
                 .format(train_curriculum_index, mean_loss, 1 - mean_cost))
 
-    LOGGER.info("Done training for train_curriculum_index: {}".format(train_curriculum_index))
 
-    for test_curriculum_index, curriculum_params in enumerate(gen_curriculum_params(params)):
-        test_num_batches = 10
+    for test_curriculum_index, curriculum_params in enumerate(gen_curriculum_params(model.params)):
+        test_num_batches = 1000
         test_batch_size = curriculum_params.batch_size
 
         LOGGER.info("Testing model for curriculum_index %d, %d batches (batch_size=%d)...",

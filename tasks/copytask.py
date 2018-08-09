@@ -39,7 +39,7 @@ def dataloader(num_batches,
     for batch_num in range(num_batches):
 
         # All batches have the same sequence length
-        seq_len = rng.randint(min_len, max_len)
+        seq_len = rng.randint(min_len, max_len+1)
         seq = rng.binomial(1, 0.5, (seq_len, batch_size, seq_width))
         # seq_len = random.randint(min_len, max_len)
         # seq = np.random.binomial(1, 0.5, (seq_len, batch_size, seq_width))
@@ -61,8 +61,8 @@ class CopyTaskParams(object):
     controller_layers = attrib(default=1,convert=int)
     num_heads = attrib(default=1, convert=int)
     sequence_width = attrib(default=8, convert=int)
-    sequence_min_len = attrib(default=1,convert=int)
-    sequence_max_len = attrib(default=20, convert=int)
+    sequence_min_len = attrib(default=5,convert=int)
+    sequence_max_len = attrib(default=10, convert=int)
     memory_n = attrib(default=128, convert=int)
     memory_m = attrib(default=20, convert=int)
     num_batches = attrib(default=50000, convert=int)
